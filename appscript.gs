@@ -53,6 +53,8 @@ function doPost(e) {
       case 'list': return jsonResponse(listItems(req));
       case 'cancel': return jsonResponse(cancelItem(req));
       case 'markSeen': return jsonResponse(markSeen(req));
+      case 'purgeTests': return jsonResponse(purgeTests(req));
+      case 'unpair': return jsonResponse(unpairSelf(req));
       default: return jsonResponse({ success: false, message: 'Unknown action: ' + req.action });
     }
   } catch (err) {
@@ -128,6 +130,14 @@ function pair(req) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Disconnects the calling device. */
+function unpairSelf(req) {
+  const devices = getDevices();
+  delete devices[sha256(req.key)];
+  PropertiesService.getScriptProperties().setProperty('DEVICES', JSON.stringify(devices));
+  return { success: true };
 }
 
 /** Run by hand from the editor to disconnect all devices. */
@@ -217,6 +227,21 @@ function markSeen(req) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Hard-deletes rows whose id starts with "test-", or listed in ids (used while building and checking). */
+function purgeTests(req) {
+  const extra = [].concat((req && req.ids) || []).map(String);
+  const sh = inboxSheet();
+  const last = sh.getLastRow();
+  let removed = 0;
+  if (last < 2) return { success: true, removed };
+  const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (let i = ids.length - 1; i >= 0; i--) {
+    const id = String(ids[i][0]);
+    if (id.indexOf('test-') === 0 || extra.indexOf(id) >= 0) { sh.deleteRow(i + 2); removed++; }
+  }
+  return { success: true, removed };
 }
 
 // ───────────────────────── helpers ─────────────────────────
