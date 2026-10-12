@@ -1,0 +1,5 @@
+# clasp would otherwise push every .js/.html in the folder into Apps Script.
+# Only the backend and its manifest belong there.
+**/**
+!appscript.gs
+!appsscript.json

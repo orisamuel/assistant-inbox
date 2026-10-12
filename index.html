@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>מה להוסיף?</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#f6f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16171a" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="לעוזר">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<style>
+:root {
+  --bg: #f6f3ee; --card: #ffffff; --ink: #1d1d1f; --muted: #7a7670; --line: #e6e1d8;
+  --accent: #e8562a; --accent-ink: #ffffff; --ok: #2f8f5b; --chip: #efeae2;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #16171a; --card: #202226; --ink: #f2f0ec; --muted: #9a968f; --line: #2e3035;
+          --accent: #ff6a3d; --chip: #2a2c31; --ok: #5cc48a; }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body {
+  font: 17px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Heebo, Arial, sans-serif;
+  min-height: 100dvh;
+  padding: calc(env(safe-area-inset-top) + 14px) 16px calc(env(safe-area-inset-bottom) + 24px);
+}
+main { max-width: 560px; margin: 0 auto; }
+h1 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 4px 2px 10px; letter-spacing: .2px; }
+.compose { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 12px; }
+textarea {
+  display: block; width: 100%; min-height: 26dvh; resize: none; border: 0; outline: 0;
+  background: transparent; color: var(--ink); font: inherit; font-size: 21px; line-height: 1.4; padding: 4px 4px 8px;
+}
+textarea::placeholder { color: var(--muted); opacity: .7; }
+.bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chip {
+  border: 0; border-radius: 999px; background: var(--chip); color: var(--ink);
+  font: inherit; font-size: 15px; padding: 9px 14px; min-height: 40px; cursor: pointer; position: relative;
+}
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.chip input[type=date] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.send {
+  margin-inline-start: auto; border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-ink);
+  font: inherit; font-weight: 700; font-size: 17px; padding: 10px 22px; min-height: 44px; cursor: pointer;
+}
+.send:disabled { opacity: .35; }
+.remind-note { font-size: 14px; color: var(--muted); margin: 8px 4px 0; min-height: 20px; }
+.remind-note button { border: 0; background: none; color: var(--accent); font: inherit; padding: 0 4px; cursor: pointer; }
+
+h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 26px 4px 6px; display: flex; justify-content: space-between; }
+h2 span { font-weight: 400; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { display: flex; gap: 10px; align-items: flex-start; padding: 11px 4px; border-bottom: 1px solid var(--line); }
+li .txt { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; }
+li .meta { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+li.cancelled .txt { text-decoration: line-through; color: var(--muted); }
+.st { flex: none; font-size: 12.5px; color: var(--muted); white-space: nowrap; padding-top: 3px; }
+.st.seen { color: var(--ok); font-weight: 600; }
+.x { flex: none; border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; padding: 2px 6px; cursor: pointer; }
+.empty { color: var(--muted); font-size: 14px; padding: 12px 4px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 20px); transform: translate(-50%, 20px);
+  background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-size: 15px;
+  opacity: 0; transition: .2s; pointer-events: none; max-width: calc(100% - 32px); text-align: center;
+}
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+#pairView p { color: var(--muted); font-size: 15px; margin: 8px 4px 16px; }
+#pairView input {
+  width: 100%; font: inherit; font-size: 30px; letter-spacing: 10px; text-align: center; direction: ltr;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--ink); padding: 12px; margin-bottom: 12px;
+}
+#pairView .send { width: 100%; margin: 0 0 10px; }
+.link { border: 0; background: none; color: var(--accent); font: inherit; font-size: 15px; padding: 8px 4px; cursor: pointer; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section id="mainView" hidden>
+    <h1>מה להוסיף?</h1>
+    <form class="compose" id="form" autocomplete="off">
+      <textarea id="text" enterkeyhint="send" placeholder="להתקשר לאביב…" autofocus aria-label="מה להוסיף?"></textarea>
+      <div class="bar">
+        <button type="button" class="chip" data-when="today" aria-pressed="false">היום</button>
+        <button type="button" class="chip" data-when="tomorrow" aria-pressed="false">מחר</button>
+        <label class="chip" id="pickChip" aria-pressed="false"><span id="pickLabel">תאריך…</span><input type="date" id="pick" aria-label="תאריך תזכורת"></label>
+        <button type="submit" class="send" id="send" disabled>שליחה</button>
+      </div>
+    </form>
+    <div class="remind-note" id="remindNote"></div>
+    <h2>נשלח לאחרונה <span id="syncNote"></span></h2>
+    <ul id="list"></ul>
+  </section>
+
+  <section id="pairView" hidden>
+    <h1>חיבור המכשיר</h1>
+    <p>פעם אחת בכל מכשיר. קוד בן 6 ספרות יישלח למייל של 42.</p>
+    <button class="send" id="reqCode" type="button">שלח לי קוד</button>
+    <div id="codeBox" hidden>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-label="קוד חיבור">
+      <button class="send" id="doPair" type="button">חיבור</button>
+      <button class="link" id="reqAgain" type="button">שלח קוד חדש</button>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

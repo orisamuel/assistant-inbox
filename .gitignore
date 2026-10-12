@@ -1,0 +1,5 @@
+.clasp.json
+.env
+pairing/
+_test/
+.claude/
