@@ -1,0 +1,8 @@
+# GitHub Pages serves every file in the repo. These stay in the repo but are left out of the site.
+# Add any new internal file here. (Jekyll 3: this list replaces the default excludes, none of which exist here.)
+exclude:
+  - CLAUDE.md
+  - appscript.gs
+  - appsscript.json
+  - deploy.sh
+  - tools
