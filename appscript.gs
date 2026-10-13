@@ -6,6 +6,8 @@
  * The key is generated on the device and never leaves it except in request bodies;
  * only its SHA-256 hash is kept here (Script Properties → DEVICES).
  * A new device pairs with a 6-digit code emailed to the script owner.
+ * After 10 wrong codes since the last pairing, pairing locks until unlockPairing is run from the editor.
+ * The owner gets an email for every new device and for the lock.
  *
  * All requests: POST, Content-Type text/plain, body = JSON { action, key, ...params }.
  */
@@ -24,6 +26,10 @@ const PAIR_SHEET = 'חיבור';
 
 const PAIR_TTL_MS = 10 * 60 * 1000;
 const PAIR_MAX_TRIES = 5;
+// Wrong codes since the last successful pairing, across all codes. Script Properties, not the cache,
+// because the cache forgets after 6 hours at most.
+const PAIR_MAX_FAILS = 10;
+const PAIR_LOCKED_MSG = 'חיבור מכשירים חדשים נעול (יותר מדי קודים שגויים)';
 const MAX_TEXT = 2000;
 
 // ───────────────────────── router ─────────────────────────
@@ -79,7 +85,12 @@ function checkDevice(key) {
   return devices[sha256(key)] || null;
 }
 
+function pairingLocked(props) {
+  return Number(props.getProperty('PAIR_FAILS') || 0) >= PAIR_MAX_FAILS;
+}
+
 function requestPair(req) {
+  if (pairingLocked(PropertiesService.getScriptProperties())) return { success: false, message: PAIR_LOCKED_MSG };
   const cache = CacheService.getScriptCache();
   if (cache.get('pair_rl')) return { success: false, message: 'נשלח קוד לפני פחות מדקה' };
   const today = fmt(new Date(), 'yyyyMMdd');
@@ -110,6 +121,7 @@ function pair(req) {
   lock.waitLock(10000);
   try {
     const props = PropertiesService.getScriptProperties();
+    if (pairingLocked(props)) return { success: false, message: PAIR_LOCKED_MSG };
     const p = JSON.parse(props.getProperty('PAIR') || 'null');
     if (!p || Date.now() > p.exp || p.tries >= PAIR_MAX_TRIES) {
       return { success: false, message: 'הקוד פג. צריך לבקש קוד חדש' };
@@ -117,15 +129,27 @@ function pair(req) {
     if (sha256(String(req.code || '').trim()) !== p.hash) {
       p.tries++;
       props.setProperty('PAIR', JSON.stringify(p));
+      const fails = Number(props.getProperty('PAIR_FAILS') || 0) + 1;
+      props.setProperty('PAIR_FAILS', String(fails));
+      if (fails >= PAIR_MAX_FAILS) {
+        lockPairing(props);
+        return { success: false, message: PAIR_LOCKED_MSG };
+      }
       return { success: false, message: 'קוד שגוי' };
     }
     if (!req.key || String(req.key).length < 32) return { success: false, message: 'מפתח לא תקין' };
     const devices = getDevices();
-    devices[sha256(req.key)] = { name: String(req.name || 'מכשיר').slice(0, 60), since: fmt(new Date(), 'dd/MM/yyyy HH:mm') };
+    const name = String(req.name || 'מכשיר').slice(0, 60);
+    const since = fmt(new Date(), 'dd/MM/yyyy HH:mm');
+    devices[sha256(req.key)] = { name, since };
     props.setProperty('DEVICES', JSON.stringify(devices));
     props.deleteProperty('PAIR');
+    props.deleteProperty('PAIR_FAILS');
     const sh = ensureSheet(PAIR_SHEET, ['קוד חיבור', 'בתוקף עד']);
     sh.getRange(2, 1, 1, 2).clearContent();
+    mailOwner('מכשיר חדש התחבר לתיבת המשימות: ' + name,
+      'מכשיר חדש התחבר לתיבת המשימות: ' + name + ', ' + since + '.\n\n' +
+      'לא אתה? להריץ resetDevices ב-Apps Script של השיטס. זה מנתק את כל המכשירים, ואז מחברים מחדש את שלך.');
     return { success: true };
   } finally {
     lock.releaseLock();
@@ -143,6 +167,31 @@ function unpairSelf(req) {
 /** Run by hand from the editor to disconnect all devices. */
 function resetDevices() {
   PropertiesService.getScriptProperties().deleteProperty('DEVICES');
+}
+
+function lockPairing(props) {
+  props.deleteProperty('PAIR');
+  ensureSheet(PAIR_SHEET, ['קוד חיבור', 'בתוקף עד']).getRange(2, 1, 1, 2).clearContent();
+  mailOwner('תיבת המשימות: חיבור מכשירים חדשים ננעל',
+    'מאז החיבור האחרון היו ' + PAIR_MAX_FAILS + ' ניסיונות עם קוד שגוי, אז חיבור מכשירים חדשים ננעל. ' +
+    'המכשירים שכבר מחוברים ממשיכים לעבוד.\n\nאם זה לא היית אתה, מישהו ניסה לנחש קוד.\n' +
+    'כדי לשחרר: לפתוח את Apps Script מתוך השיטס ולהריץ unlockPairing.');
+}
+
+/** Run by hand from the editor to allow pairing again after the lock. */
+function unlockPairing() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty('PAIR_FAILS');
+  props.deleteProperty('PAIR');
+}
+
+// Best effort: a failed mail must not undo a pairing that already happened.
+function mailOwner(subject, body) {
+  try {
+    MailApp.sendEmail({ to: OWNER_EMAIL, subject, body });
+  } catch (err) {
+    console.error('mail failed: ' + err);
+  }
 }
 
 // ───────────────────────── inbox ─────────────────────────
