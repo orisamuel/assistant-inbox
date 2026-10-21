@@ -98,8 +98,9 @@ $('pick').addEventListener('change', e => {
   renderCompose(); ta.focus();
 });
 ta.addEventListener('input', () => { if (!ta.value.trim()) autoOff = false; renderCompose(); });
+// Enter is a new line inside the task; sending is the button. Ctrl/Cmd+Enter sends from a computer keyboard.
 ta.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) { e.preventDefault(); submit(); }
 });
 $('form').addEventListener('submit', e => { e.preventDefault(); submit(); });
 
