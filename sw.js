@@ -1,5 +1,5 @@
 // App shell cache: opens instantly, even with no network. Bump VERSION on every frontend change.
-const VERSION = 'inbox-v2';
+const VERSION = 'inbox-v3';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

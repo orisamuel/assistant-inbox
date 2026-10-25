@@ -267,12 +267,35 @@ function start() {
 window.addEventListener('online', () => { renderList(); flush(); });
 window.addEventListener('offline', renderList);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && key) { ta.focus(); flush().then(refresh); }
+  if (document.visibilityState !== 'visible') return;
+  if (reloadWhenIdle) reloadIfIdle(); else checkForUpdate();
+  if (key) { ta.focus(); flush().then(refresh); }
 });
 let toastTimer;
 function toast(msg) {
   const t = $('toast'); t.textContent = msg; t.classList.add('on');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 2200);
 }
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// ───────── updates ─────────
+// From the home screen the phone resumes the app without reloading it, sometimes for days, so the
+// cached version could stay forever. Check for a new version whenever the app comes back to the
+// screen, and reload once the new one takes over, but never while something is being typed.
+let reloadWhenIdle = false;
+function reloadIfIdle() {
+  if (ta.value.trim() || $('code').value) return;
+  location.reload();
+}
+function checkForUpdate() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
+}
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller; // false on the very first visit: nothing to refresh
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;
+    reloadWhenIdle = true; reloadIfIdle();
+  });
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
 start();
