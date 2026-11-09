@@ -10,6 +10,8 @@
  * The owner gets an email for every new device and for the lock.
  *
  * All requests: POST, Content-Type text/plain, body = JSON { action, key, ...params }.
+ * The Siri shortcut sends { action: 'add', key, text, reply: 'text' }: no id (one is made here),
+ * and gets back one Hebrew line to show or speak instead of JSON.
  */
 
 const SHEET_ID = '1gj_u_xEtOwRDndMBtNj18qZrUvTq4FreBHpZG_DY9X0';
@@ -46,25 +48,27 @@ function doPost(e) {
   } catch (err) {
     return jsonResponse({ success: false, message: 'bad json' });
   }
+  const respond = req.reply === 'text' ? textResponse : jsonResponse;
   try {
     switch (req.action) {
-      case 'ping': return jsonResponse({ success: true });
-      case 'requestPair': return jsonResponse(requestPair(req));
-      case 'pair': return jsonResponse(pair(req));
+      case 'ping': return respond({ success: true });
+      case 'requestPair': return respond(requestPair(req));
+      case 'pair': return respond(pair(req));
     }
     const device = checkDevice(req.key);
-    if (!device) return jsonResponse({ success: false, message: 'unauthorized', unauthorized: true });
+    if (!device) return respond({ success: false, message: 'unauthorized', unauthorized: true });
     switch (req.action) {
-      case 'add': return jsonResponse(addItem(req));
-      case 'list': return jsonResponse(listItems(req));
-      case 'cancel': return jsonResponse(cancelItem(req));
-      case 'markSeen': return jsonResponse(markSeen(req));
-      case 'purgeTests': return jsonResponse(purgeTests(req));
-      case 'unpair': return jsonResponse(unpairSelf(req));
-      default: return jsonResponse({ success: false, message: 'Unknown action: ' + req.action });
+      case 'add': return respond(addItem(req));
+      case 'list': return respond(listItems(req));
+      case 'cancel': return respond(cancelItem(req));
+      case 'markSeen': return respond(markSeen(req));
+      case 'purgeTests': return respond(purgeTests(req));
+      case 'unpair': return respond(unpairSelf(req));
+      case 'siriKey': return respond(siriKey(device));
+      default: return respond({ success: false, message: 'Unknown action: ' + req.action });
     }
   } catch (err) {
-    return jsonResponse({ success: false, message: err.toString() });
+    return respond({ success: false, message: err.toString() });
   }
 }
 
@@ -164,6 +168,29 @@ function unpairSelf(req) {
   return { success: true };
 }
 
+/**
+ * Makes the key for the Siri shortcut, asked for from a paired device (the phone app shows it once
+ * to paste into the shortcut). There is one Siri key at a time: a new one replaces the old.
+ */
+function siriKey(device) {
+  const key = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const devices = getDevices();
+    Object.keys(devices).forEach(h => { if (devices[h].siri) delete devices[h]; });
+    const since = fmt(new Date(), 'dd/MM/yyyy HH:mm');
+    devices[sha256(key)] = { name: 'קיצור הדרך של סירי', since, siri: true };
+    PropertiesService.getScriptProperties().setProperty('DEVICES', JSON.stringify(devices));
+    mailOwner('נוצר מפתח לקיצור הדרך של סירי',
+      'נוצר מפתח חדש לקיצור הדרך של סירי בתיבת המשימות, מתוך ' + device.name + ', ' + since + '. המפתח הקודם של סירי הפסיק לעבוד.\n\n' +
+      'לא אתה? להריץ resetDevices ב-Apps Script של השיטס. זה מנתק את כל המכשירים, ואז מחברים מחדש את שלך.');
+    return { success: true, key };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /** Run by hand from the editor to disconnect all devices. */
 function resetDevices() {
   PropertiesService.getScriptProperties().deleteProperty('DEVICES');
@@ -208,7 +235,9 @@ function findRow(sh, id) {
 }
 
 function addItem(req) {
-  const id = String(req.id || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 40);
+  // The phone makes its own id, so a resend from its queue is recognised. The Siri shortcut sends none.
+  const id = req.id ? String(req.id).replace(/[^a-zA-Z0-9-]/g, '').slice(0, 40)
+                    : 'siri-' + Date.now().toString(36) + '-' + Utilities.getUuid().slice(0, 8);
   const text = String(req.text || '').trim().slice(0, MAX_TEXT);
   if (!id || !text) return { success: false, message: 'חסר טקסט' };
   const remind = /^\d{2}\/\d{2}\/\d{4}$/.test(req.remind || '') ? req.remind : '';
@@ -222,7 +251,7 @@ function addItem(req) {
     // A leading = or + would turn the line into a formula.
     const safe = /^[=+\-@]/.test(text) ? "'" + text : text;
     sh.appendRow([id, created, safe, remind, ST_NEW, '']);
-    return { success: true };
+    return { success: true, say: 'נשמר: ' + text };
   } finally {
     lock.releaseLock();
   }
@@ -319,6 +348,14 @@ function fmt(d, pattern) {
 
 function jsonResponse(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// For the Siri shortcut: one line it can show or speak as is.
+function textResponse(obj) {
+  const line = obj.success ? (obj.say || 'בוצע')
+    : obj.unauthorized ? 'לא נשמר: המפתח של סירי לא מוכר. צריך ליצור מפתח חדש בקלודוש'
+    : 'לא נשמר: ' + (obj.message || 'שגיאה');
+  return ContentService.createTextOutput(line).setMimeType(ContentService.MimeType.TEXT);
 }
 
 /** Run once from the editor to approve permissions and build the sheets. */

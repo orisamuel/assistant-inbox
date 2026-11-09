@@ -80,6 +80,16 @@ li.cancelled .txt { text-decoration: line-through; color: var(--muted); }
 }
 #pairView .send { width: 100%; margin: 0 0 10px; }
 .link { border: 0; background: none; color: var(--accent); font: inherit; font-size: 15px; padding: 8px 4px; cursor: pointer; }
+.foot { text-align: center; margin-top: 22px; }
+.foot .link { color: var(--muted); font-size: 14px; }
+.siri { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 12px; margin-top: 22px; }
+.siri p { font-size: 14px; color: var(--muted); margin: 2px 4px 12px; }
+.siri label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 4px 4px; }
+.copyrow { display: flex; gap: 8px; margin-bottom: 12px; }
+.copyrow input {
+  flex: 1; min-width: 0; font: 13px ui-monospace, Menlo, Consolas, monospace; padding: 0 10px; min-height: 40px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink);
+}
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -99,6 +109,16 @@ li.cancelled .txt { text-decoration: line-through; color: var(--muted); }
     <div class="remind-note" id="remindNote"></div>
     <h2>נשלח לאחרונה <span id="syncNote"></span></h2>
     <ul id="list"></ul>
+    <div class="foot"><button class="link" id="siriBtn" type="button">קיצור דרך לסירי</button></div>
+    <div class="siri" id="siriBox" hidden>
+      <p>לקיצור הדרך צריך שני דברים מכאן. כל אחד מעתיקים ומדביקים בשדה שלו.</p>
+      <label for="siriUrl">כתובת (URL)</label>
+      <div class="copyrow"><input id="siriUrl" readonly dir="ltr"><button class="chip" type="button" data-copy="siriUrl">העתקה</button></div>
+      <label for="siriKey">מפתח (key)</label>
+      <div class="copyrow"><input id="siriKey" readonly dir="ltr"><button class="chip" type="button" data-copy="siriKey">העתקה</button></div>
+      <p>המפתח לא יוצג שוב. אם הוא אבד, יוצרים חדש והקודם מפסיק לעבוד.</p>
+      <button class="link" id="siriClose" type="button">סגירה</button>
+    </div>
   </section>
 
   <section id="pairView" hidden>

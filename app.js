@@ -257,6 +257,31 @@ async function doPair() {
   } catch { toast('אין חיבור'); }
 }
 
+// ───────── siri ─────────
+// The Siri shortcut posts straight to the backend with a key of its own, made here and shown once.
+$('siriBtn').onclick = async () => {
+  if (!confirm('ליצור מפתח לקיצור הדרך של סירי?\nאם כבר יש מפתח כזה, הוא יפסיק לעבוד.')) return;
+  const b = $('siriBtn'); b.disabled = true;
+  try {
+    const r = await api('siriKey');
+    if (!r.success) { toast(r.message || 'לא הצליח'); return; }
+    $('siriUrl').value = SCRIPT_URL; $('siriKey').value = r.key;
+    $('siriBox').hidden = false; b.hidden = true;
+  } catch { toast('אין חיבור'); }
+  finally { b.disabled = false; }
+};
+document.querySelectorAll('[data-copy]').forEach(btn => btn.addEventListener('click', () => {
+  const input = $(btn.dataset.copy);
+  input.select(); input.setSelectionRange(0, input.value.length);
+  const done = () => toast('הועתק');
+  // execCommand is the older way, for browsers that refuse the clipboard API.
+  navigator.clipboard.writeText(input.value).then(done,
+    () => document.execCommand('copy') ? done() : toast('לא הועתק. אפשר לסמן ולהעתיק ידנית'));
+}));
+$('siriClose').onclick = () => {
+  $('siriKey').value = ''; $('siriBox').hidden = true; $('siriBtn').hidden = false;
+};
+
 // ───────── start ─────────
 function start() {
   renderCompose(); renderList();
@@ -283,7 +308,7 @@ function toast(msg) {
 // screen, and reload once the new one takes over, but never while something is being typed.
 let reloadWhenIdle = false;
 function reloadIfIdle() {
-  if (ta.value.trim() || $('code').value) return;
+  if (ta.value.trim() || $('code').value || $('siriKey').value) return;
   location.reload();
 }
 function checkForUpdate() {
