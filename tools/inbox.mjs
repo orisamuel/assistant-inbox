@@ -3,6 +3,7 @@
 //   node tools/inbox.mjs seen <id> ...  → marks rows as "נקלט" (the phone shows ✓✓)
 //   node tools/inbox.mjs purge-tests    → deletes rows whose id starts with test-
 //   node tools/inbox.mjs pair <code>    → registers this computer as a device, writes INBOX_KEY to .env
+//   node tools/inbox.mjs keyterms [set "a, b"] → words the recording transcription should expect
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -45,6 +46,14 @@ if (cmd === 'pair') {
   console.log(`marked ${r.marked}`);
 } else if (cmd === 'purge-tests') {
   console.log(JSON.stringify(await api({ action: 'purgeTests', key, ids: args })));
+} else if (cmd === 'keyterms') {
+  // keyterms                 → the words Scribe is told to expect in recordings
+  // keyterms set "א, ב, ג"   → replaces the private list (people, clients); kept in Script Properties
+  const body = { action: 'keyterms', key };
+  if (args[0] === 'set') body.set = args.slice(1).join(',').split(',').map(s => s.trim()).filter(Boolean);
+  const r = await api(body);
+  if (!r.success) { console.error(r.message); process.exit(1); }
+  console.log(JSON.stringify({ base: r.base, own: r.own }, null, 1));
 } else {
-  console.log('usage: node tools/inbox.mjs new | seen <id...> | pair <code>');
+  console.log('usage: node tools/inbox.mjs new | seen <id...> | pair <code> | keyterms [set "a, b"]');
 }

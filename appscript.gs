@@ -12,15 +12,20 @@
  * All requests: POST, Content-Type text/plain, body = JSON { action, key, ...params }.
  * The Siri shortcut sends { action: 'add', key, text, reply: 'text' }: no id (one is made here),
  * and gets back one Hebrew line to show or speak instead of JSON.
+ * The recording shortcut sends { action: 'add', key, audio: <base64 m4a>, reply: 'text' }: the audio
+ * is kept in Drive and transcribed by ElevenLabs Scribe on fal (Script Properties → FAL_KEY_INBOX,
+ * Ori's private fal account). If that fails, the line keeps a link to the recording instead.
  */
 
 const SHEET_ID = '1gj_u_xEtOwRDndMBtNj18qZrUvTq4FreBHpZG_DY9X0';
 const OWNER_EMAIL = 'ori@42creative.co.il';
 const TZ = 'Asia/Jerusalem';
 
-// Schema (sheet "תיבה"): id(0), נכתב(1), טקסט(2), תזכורת(3), מצב(4), נקלט_ב(5)
+// Schema (sheet "תיבה"): id(0), נכתב(1), טקסט(2), תזכורת(3), מצב(4), נקלט_ב(5),
+// הקלטה(6): Drive link, only on lines that came in as a recording.
 const INBOX = 'תיבה';
 const INBOX_HEADERS = ['id', 'נכתב', 'טקסט', 'תזכורת', 'מצב', 'נקלט ב'];
+const AUDIO_HEADER = 'הקלטה';
 const ST_NEW = 'חדש', ST_SEEN = 'נקלט', ST_CANCEL = 'בוטל';
 
 // Sheet "חיבור": the pending pairing code, so it can also be read from the Sheets app.
@@ -33,6 +38,15 @@ const PAIR_MAX_TRIES = 5;
 const PAIR_MAX_FAILS = 10;
 const PAIR_LOCKED_MSG = 'חיבור מכשירים חדשים נעול (יותר מדי קודים שגויים)';
 const MAX_TEXT = 2000;
+
+// Recordings: kept in a Drive folder next to the sheet, transcribed by Scribe ($0.008 a minute,
+// +30% with key terms). Key terms help with names and English words said in Hebrew. These few are
+// generic; people and clients go in Script Properties → KEYTERMS (set with tools/inbox.mjs keyterms),
+// so they stay out of this public repo.
+const AUDIO_FOLDER = 'תיבת המשימות: הקלטות';
+const SCRIBE_URL = 'https://fal.run/fal-ai/elevenlabs/speech-to-text/scribe-v2';
+const BASE_KEYTERMS = ['קלוד', 'קלודוש', 'Claude', 'vibe coding'];
+const MAX_KEYTERMS = 100, MAX_KEYTERM_LEN = 50;
 
 // ───────────────────────── router ─────────────────────────
 
@@ -65,6 +79,7 @@ function doPost(e) {
       case 'purgeTests': return respond(purgeTests(req));
       case 'unpair': return respond(unpairSelf(req));
       case 'siriKey': return respond(siriKey(device));
+      case 'keyterms': return respond(keytermsAction(req));
       default: return respond({ success: false, message: 'Unknown action: ' + req.action });
     }
   } catch (err) {
@@ -238,7 +253,20 @@ function addItem(req) {
   // The phone makes its own id, so a resend from its queue is recognised. The Siri shortcut sends none.
   const id = req.id ? String(req.id).replace(/[^a-zA-Z0-9-]/g, '').slice(0, 40)
                     : 'siri-' + Date.now().toString(36) + '-' + Utilities.getUuid().slice(0, 8);
-  const text = String(req.text || '').trim().slice(0, MAX_TEXT);
+  let text = String(req.text || '').trim().slice(0, MAX_TEXT);
+  let audioUrl = '', say = '';
+  if (req.audio) {
+    // Kept in Drive before anything else, so a failed transcription loses nothing. Outside the lock:
+    // the transcription takes a few seconds.
+    const blob = Utilities.newBlob(Utilities.base64Decode(String(req.audio).replace(/\s/g, '')), 'audio/mp4', id + '.m4a');
+    audioUrl = recordingsFolder().createFile(blob).getUrl();
+    const heard = transcribe(blob);
+    if (heard.text) text = heard.text.slice(0, MAX_TEXT);
+    else {
+      text = '🎙 הקלטה בלי תמלול (' + heard.error + '): ' + audioUrl;
+      say = 'ההקלטה נשמרה, אבל בלי תמלול: ' + heard.error;
+    }
+  }
   if (!id || !text) return { success: false, message: 'חסר טקסט' };
   const remind = /^\d{2}\/\d{2}\/\d{4}$/.test(req.remind || '') ? req.remind : '';
   const created = /^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/.test(req.created || '') ? req.created : fmt(new Date(), 'dd/MM/yyyy HH:mm');
@@ -250,11 +278,73 @@ function addItem(req) {
     if (findRow(sh, id)) return { success: true, duplicate: true }; // retries from the offline queue
     // A leading = or + would turn the line into a formula.
     const safe = /^[=+\-@]/.test(text) ? "'" + text : text;
-    sh.appendRow([id, created, safe, remind, ST_NEW, '']);
-    return { success: true, say: 'נשמר: ' + text };
+    const row = [id, created, safe, remind, ST_NEW, ''];
+    if (audioUrl) {
+      row.push(audioUrl);
+      if (!sh.getRange(1, 7).getValue()) sh.getRange(1, 7).setValue(AUDIO_HEADER).setFontWeight('bold');
+    }
+    sh.appendRow(row);
+    return { success: true, say: say || 'נשמר: ' + text };
   } finally {
     lock.releaseLock();
   }
+}
+
+// ───────────────────────── recordings ─────────────────────────
+
+function recordingsFolder() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('AUDIO_FOLDER_ID');
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (err) { /* deleted: make a new one */ }
+  }
+  const parents = DriveApp.getFileById(SHEET_ID).getParents();
+  const folder = (parents.hasNext() ? parents.next() : DriveApp.getRootFolder()).createFolder(AUDIO_FOLDER);
+  props.setProperty('AUDIO_FOLDER_ID', folder.getId());
+  return folder;
+}
+
+/** → { text } or { error } in Hebrew, short enough for Siri to say. */
+function transcribe(blob) {
+  const falKey = PropertiesService.getScriptProperties().getProperty('FAL_KEY_INBOX');
+  if (!falKey) return { error: 'אין מפתח fal' };
+  const terms = keyterms();
+  const res = UrlFetchApp.fetch(SCRIBE_URL, {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Key ' + falKey },
+    payload: JSON.stringify(Object.assign({
+      audio_url: 'data:audio/mp4;base64,' + Utilities.base64Encode(blob.getBytes()),
+      language_code: 'heb', tag_audio_events: false, diarize: false
+    }, terms.length ? { keyterms: terms } : {}))
+  });
+  if (res.getResponseCode() !== 200) {
+    console.error('scribe ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 500));
+    return { error: 'התמלול נכשל, קוד ' + res.getResponseCode() };
+  }
+  const text = String(JSON.parse(res.getContentText()).text || '').trim();
+  return text ? { text } : { error: 'לא נשמע דיבור' };
+}
+
+function keyterms() {
+  const own = JSON.parse(PropertiesService.getScriptProperties().getProperty('KEYTERMS') || '[]');
+  return BASE_KEYTERMS.concat(own.filter(t => BASE_KEYTERMS.indexOf(t) < 0)).slice(0, MAX_KEYTERMS);
+}
+
+/** { set: [...] } replaces the private key terms; without it, returns them. */
+function keytermsAction(req) {
+  if (req.set) {
+    const own = [].concat(req.set).map(t => String(t).trim()).filter(t => t && t.length <= MAX_KEYTERM_LEN)
+      .slice(0, MAX_KEYTERMS - BASE_KEYTERMS.length);
+    PropertiesService.getScriptProperties().setProperty('KEYTERMS', JSON.stringify(own));
+  }
+  return { success: true, base: BASE_KEYTERMS, own: JSON.parse(PropertiesService.getScriptProperties().getProperty('KEYTERMS') || '[]') };
+}
+
+/** Run once from the editor after recordings were added: approves Drive and calls out (fal), makes the folder. */
+function authorizeRecordings() {
+  console.log('folder: ' + recordingsFolder().getUrl());
+  UrlFetchApp.fetch('https://fal.run', { muteHttpExceptions: true });
+  console.log('fal key: ' + (PropertiesService.getScriptProperties().getProperty('FAL_KEY_INBOX') ? 'set' : 'missing'));
 }
 
 function listItems(req) {
@@ -307,17 +397,24 @@ function markSeen(req) {
   }
 }
 
-/** Hard-deletes rows whose id starts with "test-", or listed in ids (used while building and checking). */
+/**
+ * Hard-deletes rows whose id starts with "test-", or listed in ids (used while building and checking),
+ * and moves their recordings to the Drive trash.
+ */
 function purgeTests(req) {
   const extra = [].concat((req && req.ids) || []).map(String);
   const sh = inboxSheet();
   const last = sh.getLastRow();
   let removed = 0;
   if (last < 2) return { success: true, removed };
-  const ids = sh.getRange(2, 1, last - 1, 1).getValues();
-  for (let i = ids.length - 1; i >= 0; i--) {
-    const id = String(ids[i][0]);
-    if (id.indexOf('test-') === 0 || extra.indexOf(id) >= 0) { sh.deleteRow(i + 2); removed++; }
+  const rows = sh.getRange(2, 1, last - 1, Math.max(7, sh.getLastColumn())).getValues();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const id = String(rows[i][0]);
+    if (id.indexOf('test-') !== 0 && extra.indexOf(id) < 0) continue;
+    // A test recording goes to the Drive trash with its line (recoverable there for 30 days).
+    const file = String(rows[i][6] || '').match(/\/d\/([\w-]+)/);
+    if (file) { try { DriveApp.getFileById(file[1]).setTrashed(true); } catch (err) { /* already gone */ } }
+    sh.deleteRow(i + 2); removed++;
   }
   return { success: true, removed };
 }
