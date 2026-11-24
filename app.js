@@ -131,7 +131,10 @@ const looseAudio = new Map(); // id → Blob, when IndexedDB refused it (sent fr
 let recorder = null, recChunks = [], recStart = 0, recTimer = null;
 
 function audioStore(mode, fn) {
-  return new Promise((resolve, reject) => {
+  return new Promise((res, rej) => {
+    // Never wait forever: a stuck IndexedDB would otherwise hold up the queue or lose a recording silently.
+    const timer = setTimeout(() => rej(new Error('IndexedDB did not answer')), 8000);
+    const resolve = v => { clearTimeout(timer); res(v); }, reject = e => { clearTimeout(timer); rej(e); };
     const open = indexedDB.open('inbox-audio', 1);
     open.onupgradeneeded = () => open.result.createObjectStore('audio');
     open.onerror = () => reject(open.error);
@@ -271,15 +274,7 @@ async function flush() {
     // oldest first, so the sheet keeps the writing order
     for (const it of items.filter(i => i.op).reverse()) {
       if (it.op === 'add' && it.audio) {
-        const blob = await audioGet(it.id).catch(() => null);
-        if (!blob) { items = items.filter(i => i.id !== it.id); toast('הקלטה אחת אבדה לפני שנשלחה'); save(); continue; }
-        // Upload and transcription can take a minute or more. A resend after a timeout is safe: the server
-        // answers it from the sheet, or with "pending" while it is still transcribing.
-        const r = await api('add', { id: it.id, audio: await blobToBase64(blob), audioType: it.audioType,
-                                     remind: it.remind, created: it.created }, 180000);
-        if (r.pending) break;
-        if (r.success) { it.op = null; it.status = 'חדש'; it.audio = false; if (r.text) it.text = r.text; audioDel(it.id); }
-        else { toast('שגיאה: ' + (r.message || '')); break; }
+        await sendRecording(it);
       } else if (it.op === 'add') {
         const r = await api('add', { id: it.id, text: it.text, remind: it.remind, created: it.created });
         if (r.success) { it.op = null; it.status = 'חדש'; }
@@ -297,6 +292,31 @@ async function flush() {
     flushing = false; renderList();
     clearTimeout(retryTimer);
     if (items.some(i => i.op)) retryTimer = setTimeout(flush, 15000);
+  }
+}
+
+// A recording's failures never end the round, so lines typed after it still go out, and a recording that
+// failed waits longer each time (up to 10 minutes) instead of uploading again every 15 seconds.
+// Upload and transcription can take a minute or more. A resend after a timeout is safe: the server
+// answers it from the sheet, or with "pending" while it is still transcribing.
+async function sendRecording(it) {
+  if (it.retryAt && Date.now() < it.retryAt) return;
+  const later = () => { it.tries = (it.tries || 0) + 1; it.retryAt = Date.now() + Math.min(15000 * 2 ** it.tries, 600000); };
+  let blob;
+  try { blob = await audioGet(it.id); } catch { later(); return; } // could not read: the audio may still be there
+  if (!blob) { items = items.filter(i => i.id !== it.id); toast('הקלטה אחת אבדה לפני שנשלחה'); return; }
+  try {
+    const r = await api('add', { id: it.id, audio: await blobToBase64(blob), audioType: it.audioType,
+                                 remind: it.remind, created: it.created }, 180000);
+    if (r.success) {
+      Object.assign(it, { op: null, status: 'חדש', audio: false, tries: 0, retryAt: 0 });
+      if (r.text) it.text = r.text;
+      audioDel(it.id);
+    } else if (r.pending) it.retryAt = Date.now() + 15000;
+    else { toast('ההקלטה לא נשלחה: ' + (r.message || '')); later(); }
+  } catch (e) {
+    if (e.message === 'unauthorized') throw e;
+    later();
   }
 }
 
@@ -386,7 +406,7 @@ function start() {
   show('main'); ta.focus();
   flush().then(refresh);
 }
-window.addEventListener('online', () => { renderList(); flush(); });
+window.addEventListener('online', () => { items.forEach(i => { i.retryAt = 0; }); renderList(); flush(); });
 window.addEventListener('offline', renderList);
 document.addEventListener('visibilitychange', () => {
   // The phone cuts the mic when the app leaves the screen: keep what was recorded until then.
