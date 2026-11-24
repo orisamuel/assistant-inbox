@@ -33,11 +33,24 @@ body {
 }
 main { max-width: 560px; margin: 0 auto; }
 h1 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 4px 2px 10px; letter-spacing: .2px; }
-.compose { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 12px; }
+.compose { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 12px; position: relative; }
 textarea {
   display: block; width: 100%; min-height: 26dvh; resize: none; border: 0; outline: 0;
   background: transparent; color: var(--ink); font: inherit; font-size: 21px; line-height: 1.4; padding: 4px 4px 8px;
+  padding-inline-end: 58px; /* room for the mic */
 }
+.mic {
+  position: absolute; top: 12px; inset-inline-end: 12px; display: flex; align-items: center; justify-content: center; gap: 7px;
+  min-width: 48px; height: 48px; padding: 0 13px; border: 0; border-radius: 999px; background: var(--chip); color: var(--ink);
+  font: inherit; font-size: 16px; font-weight: 600; cursor: pointer;
+}
+.mic span { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; }
+.mic span:empty { display: none; }
+.mic.rec { background: #d93025; color: #fff; }
+.mic.rec svg { display: none; }
+.mic.rec::before { content: ''; width: 11px; height: 11px; border-radius: 2px; background: currentColor; animation: blink 1s infinite alternate; }
+@keyframes blink { to { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .mic.rec::before { animation: none; } }
 textarea::placeholder { color: var(--muted); opacity: .7; }
 .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .chip {
@@ -98,6 +111,7 @@ li.cancelled .txt { text-decoration: line-through; color: var(--muted); }
   <section id="mainView" hidden>
     <h1>מה להוסיף?</h1>
     <form class="compose" id="form" autocomplete="off">
+      <button type="button" class="mic" id="mic" aria-label="הקלטה"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span></span></button>
       <textarea id="text" enterkeyhint="enter" placeholder="להתקשר לאביב…" autofocus aria-label="מה להוסיף?"></textarea>
       <div class="bar">
         <button type="button" class="chip" data-when="today" aria-pressed="false">היום</button>

@@ -12,9 +12,10 @@
  * All requests: POST, Content-Type text/plain, body = JSON { action, key, ...params }.
  * The Siri shortcut sends { action: 'add', key, text, reply: 'text' }: no id (one is made here),
  * and gets back one Hebrew line to show or speak instead of JSON.
- * The recording shortcut sends { action: 'add', key, audio: <base64 m4a>, reply: 'text' }: the audio
- * is kept in Drive and transcribed by ElevenLabs Scribe on fal (Script Properties → FAL_KEY_INBOX,
- * Ori's private fal account). If that fails, the line keeps a link to the recording instead.
+ * The recording shortcut sends { action: 'add', key, audio: <base64 m4a>, reply: 'text' }, and the
+ * app's mic button { action: 'add', key, id, audio, audioType, remind, created }: the audio is kept in
+ * Drive and transcribed by ElevenLabs Scribe on fal (Script Properties → FAL_KEY_INBOX, Ori's private
+ * fal account). If that fails, the line keeps a link to the recording instead.
  */
 
 const SHEET_ID = '1gj_u_xEtOwRDndMBtNj18qZrUvTq4FreBHpZG_DY9X0';
@@ -256,16 +257,16 @@ function addItem(req) {
   let text = String(req.text || '').trim().slice(0, MAX_TEXT);
   let audioUrl = '', say = '';
   if (req.audio) {
-    // Kept in Drive before anything else, so a failed transcription loses nothing. Outside the lock:
-    // the transcription takes a few seconds.
-    const blob = Utilities.newBlob(Utilities.base64Decode(String(req.audio).replace(/\s/g, '')), 'audio/mp4', id + '.m4a');
-    audioUrl = recordingsFolder().createFile(blob).getUrl();
-    const heard = transcribe(blob);
-    if (heard.text) text = heard.text.slice(0, MAX_TEXT);
-    else {
-      text = '🎙 הקלטה בלי תמלול (' + heard.error + '): ' + audioUrl;
-      say = 'ההקלטה נשמרה, אבל בלי תמלול: ' + heard.error;
-    }
+    // The app resends from its queue after a timeout. A recording that is already in the sheet, or still
+    // being transcribed, is answered from there instead of being saved and paid for again.
+    const done = findRow(inboxSheet(), id);
+    if (done) return { success: true, duplicate: true, text: inboxSheet().getRange(done, 3).getDisplayValue() };
+    const cache = CacheService.getScriptCache();
+    if (cache.get('rec_' + id)) return { success: false, pending: true, message: 'ההקלטה עוד בתמלול' };
+    cache.put('rec_' + id, '1', 600);
+    // Outside the lock: saving and transcribing take seconds.
+    const rec = keepAndTranscribe(req, id);
+    text = rec.text; audioUrl = rec.url; say = rec.say;
   }
   if (!id || !text) return { success: false, message: 'חסר טקסט' };
   const remind = /^\d{2}\/\d{2}\/\d{4}$/.test(req.remind || '') ? req.remind : '';
@@ -284,7 +285,7 @@ function addItem(req) {
       if (!sh.getRange(1, 7).getValue()) sh.getRange(1, 7).setValue(AUDIO_HEADER).setFontWeight('bold');
     }
     sh.appendRow(row);
-    return { success: true, say: say || 'נשמר: ' + text };
+    return { success: true, say: say || 'נשמר: ' + text, text };
   } finally {
     lock.releaseLock();
   }
@@ -304,6 +305,29 @@ function recordingsFolder() {
   return folder;
 }
 
+const AUDIO_EXT = { 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/webm': 'webm',
+                    'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/wav': 'wav' };
+
+/**
+ * Keeps the recording in Drive first, so a failed transcription loses nothing, then transcribes it.
+ * Never throws: whatever fails becomes the line's text, so every recording leaves a line in the sheet.
+ * The shortcut sends m4a without a type; the app sends what its recorder made (webm on desktop Chrome).
+ */
+function keepAndTranscribe(req, id) {
+  const type = (String(req.audioType || '').match(/^audio\/[\w.+-]+/) || ['audio/mp4'])[0];
+  let blob, url;
+  try {
+    blob = Utilities.newBlob(Utilities.base64Decode(String(req.audio).replace(/\s/g, '')), type, id + '.' + (AUDIO_EXT[type] || 'audio'));
+    url = recordingsFolder().createFile(blob).getUrl();
+  } catch (err) {
+    return { text: '🎙 הקלטה שלא נשמרה (' + err + ')', url: '', say: 'ההקלטה לא נשמרה: ' + err };
+  }
+  let heard;
+  try { heard = transcribe(blob); } catch (err) { heard = { error: 'התמלול נכשל: ' + err }; }
+  if (heard.text) return { text: heard.text.slice(0, MAX_TEXT), url, say: '' };
+  return { text: '🎙 הקלטה בלי תמלול (' + heard.error + '): ' + url, url, say: 'ההקלטה נשמרה, אבל בלי תמלול: ' + heard.error };
+}
+
 /** → { text } or { error } in Hebrew, short enough for Siri to say. */
 function transcribe(blob) {
   const falKey = PropertiesService.getScriptProperties().getProperty('FAL_KEY_INBOX');
@@ -313,7 +337,7 @@ function transcribe(blob) {
     method: 'post', contentType: 'application/json', muteHttpExceptions: true,
     headers: { Authorization: 'Key ' + falKey },
     payload: JSON.stringify(Object.assign({
-      audio_url: 'data:audio/mp4;base64,' + Utilities.base64Encode(blob.getBytes()),
+      audio_url: 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes()),
       language_code: 'heb', tag_audio_events: false, diarize: false
     }, terms.length ? { keyterms: terms } : {}))
   });

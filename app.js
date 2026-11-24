@@ -122,6 +122,93 @@ function submit() {
   flush();
 }
 
+// ───────── recording ─────────
+// The mic records here and the server transcribes (Scribe on fal). Until it is sent, the audio waits in
+// IndexedDB, never in localStorage: a long recording must not crowd the queue out of its 5 MB there.
+const MAX_REC_MS = 5 * 60 * 1000;
+const micBtn = $('mic');
+const looseAudio = new Map(); // id → Blob, when IndexedDB refused it (sent from memory, lost on close)
+let recorder = null, recChunks = [], recStart = 0, recTimer = null;
+
+function audioStore(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open('inbox-audio', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('audio');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      try {
+        const tx = db.transaction('audio', mode), req = fn(tx.objectStore('audio'));
+        tx.oncomplete = () => { db.close(); resolve(req.result); };
+        tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+      } catch (err) { db.close(); reject(err); }
+    };
+  });
+}
+const audioPut = (id, blob) => audioStore('readwrite', s => s.put(blob, id));
+const audioGet = id => looseAudio.has(id) ? Promise.resolve(looseAudio.get(id)) : audioStore('readonly', s => s.get(id));
+const audioDel = id => { looseAudio.delete(id); return audioStore('readwrite', s => s.delete(id)).catch(() => {}); };
+const blobToBase64 = blob => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result).split(',')[1] || '');
+  r.onerror = () => reject(r.error);
+  r.readAsDataURL(blob);
+});
+const duration = ms => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
+
+function renderMic() {
+  const on = !!recorder;
+  micBtn.classList.toggle('rec', on);
+  micBtn.setAttribute('aria-label', on ? 'עצירת ההקלטה' : 'הקלטה');
+  micBtn.querySelector('span').textContent = on ? duration(Date.now() - recStart) : '';
+  if (on && Date.now() - recStart > MAX_REC_MS) stopRecording();
+}
+
+async function startRecording() {
+  if (!window.MediaRecorder || !navigator.mediaDevices) { toast('אין כאן אפשרות להקליט'); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { toast('אין גישה למיקרופון. אפשר להקליד'); return; }
+  // iPhone records AAC in mp4, desktop Chrome Opus in webm (asked for plain mp4 it puts Opus inside, which is
+  // rarer for the transcriber). A low bitrate is plenty for speech and keeps uploads short.
+  const type = ['audio/mp4;codecs=mp4a.40.2', 'audio/webm;codecs=opus', 'audio/mp4', 'audio/webm']
+    .find(t => MediaRecorder.isTypeSupported(t));
+  try {
+    recorder = new MediaRecorder(stream, Object.assign({ audioBitsPerSecond: 48000 }, type ? { mimeType: type } : {}));
+  } catch {
+    stream.getTracks().forEach(t => t.stop()); toast('ההקלטה לא התחילה. אפשר להקליד'); return;
+  }
+  recChunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+  recorder.onstop = () => { stream.getTracks().forEach(t => t.stop()); finishRecording(); };
+  recorder.start(1000); // in slices, so a recording cut short by the phone still has its audio
+  recStart = Date.now();
+  renderMic(); recTimer = setInterval(renderMic, 500);
+}
+
+function stopRecording() {
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+}
+
+async function finishRecording() {
+  clearInterval(recTimer);
+  const ms = Date.now() - recStart;
+  const type = (recorder && recorder.mimeType) || (recChunks[0] && recChunks[0].type) || 'audio/mp4';
+  recorder = null; renderMic();
+  const blob = new Blob(recChunks, { type }); recChunks = [];
+  if (ms < 1000 || !blob.size) { toast('ההקלטה קצרה מדי'); return; }
+  const id = uid(), now = new Date();
+  try { await audioPut(id, blob); } catch { looseAudio.set(id, blob); }
+  items.unshift({ id, text: `🎙 הקלטה (${duration(ms)})`, audio: true, audioType: type, remind: manual || '',
+                  created: stamp(now), ts: now.getTime(), status: null, op: 'add' });
+  manual = null; $('pick').value = '';
+  save(); renderCompose(); renderList();
+  toast(navigator.onLine ? 'ההקלטה נשמרה. שולח לתמלול' : 'ההקלטה נשמרה. תישלח כשתחזור רשת');
+  flush();
+}
+
+micBtn.addEventListener('click', () => { if (recorder) stopRecording(); else startRecording(); });
+
 // ───────── list ─────────
 function renderList() {
   const ul = $('list');
@@ -155,15 +242,15 @@ function renderList() {
 function cancel(id) {
   const it = items.find(i => i.id === id);
   if (!it || !confirm('לבטל את השורה?\n\n' + it.text)) return;
-  if (it.op === 'add') items = items.filter(i => i.id !== id); // never left the phone
+  if (it.op === 'add') { items = items.filter(i => i.id !== id); if (it.audio) audioDel(id); } // never left the phone
   else { it.op = 'cancel'; it.status = 'בוטל'; }
   save(); renderList(); flush();
 }
 
 // ───────── network ─────────
-async function api(action, params = {}) {
+async function api(action, params = {}, timeoutMs = 25000) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 25000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(SCRIPT_URL, {
       method: 'POST', redirect: 'follow', signal: ctrl.signal,
@@ -183,7 +270,17 @@ async function flush() {
   try {
     // oldest first, so the sheet keeps the writing order
     for (const it of items.filter(i => i.op).reverse()) {
-      if (it.op === 'add') {
+      if (it.op === 'add' && it.audio) {
+        const blob = await audioGet(it.id).catch(() => null);
+        if (!blob) { items = items.filter(i => i.id !== it.id); toast('הקלטה אחת אבדה לפני שנשלחה'); save(); continue; }
+        // Upload and transcription can take a minute or more. A resend after a timeout is safe: the server
+        // answers it from the sheet, or with "pending" while it is still transcribing.
+        const r = await api('add', { id: it.id, audio: await blobToBase64(blob), audioType: it.audioType,
+                                     remind: it.remind, created: it.created }, 180000);
+        if (r.pending) break;
+        if (r.success) { it.op = null; it.status = 'חדש'; it.audio = false; if (r.text) it.text = r.text; audioDel(it.id); }
+        else { toast('שגיאה: ' + (r.message || '')); break; }
+      } else if (it.op === 'add') {
         const r = await api('add', { id: it.id, text: it.text, remind: it.remind, created: it.created });
         if (r.success) { it.op = null; it.status = 'חדש'; }
         else { toast('שגיאה: ' + (r.message || '')); break; }
@@ -292,7 +389,8 @@ function start() {
 window.addEventListener('online', () => { renderList(); flush(); });
 window.addEventListener('offline', renderList);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
+  // The phone cuts the mic when the app leaves the screen: keep what was recorded until then.
+  if (document.visibilityState !== 'visible') { stopRecording(); return; }
   if (reloadWhenIdle) reloadIfIdle(); else checkForUpdate();
   if (key) { ta.focus(); flush().then(refresh); }
 });
@@ -308,7 +406,8 @@ function toast(msg) {
 // screen, and reload once the new one takes over, but never while something is being typed.
 let reloadWhenIdle = false;
 function reloadIfIdle() {
-  if (ta.value.trim() || $('code').value || $('siriKey').value) return;
+  // Nor while recording, or while a recording is unsent (one IndexedDB refused lives only in memory).
+  if (ta.value.trim() || $('code').value || $('siriKey').value || recorder || items.some(i => i.audio && i.op)) return;
   location.reload();
 }
 function checkForUpdate() {
